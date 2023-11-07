@@ -1,0 +1,95 @@
+s3 bucket name: serverless-datalake-project
+Input folder name: csvDataStore
+Output folder name: parquetDataStore
+
+Database name: datalake-project
+Crawler name: serverless-datalake-crawler
+
+IAM role name: glue-datalake-s3-cw-access - AmazonS3FullAccess, AWSGlueServiceRole and CloudWatchFullAccess
+
+SNS Topic: datalake-file-ready
+
+Lambda Code to trigger Glue Crawler:
+---------------------------------------------------------------
+import json
+import boto3
+glue=boto3.client('glue');
+
+def lambda_handler(event, context):
+    print(event)
+    response = glue.start_crawler(
+    Name='serverless-datalake-crawler'
+    )
+    return {
+        'statusCode': 200,
+        'body': json.dumps('Hello from Lambda!')
+    }
+
+Note: Dont forget to add permission policies to the lambda function - AmazonS3FullAccess and AWSGlueServiceRole 
+
+
+
+Lambda Code to trigger Glue Job:
+----------------------------------------------------------
+
+import json
+import boto3
+
+
+def lambda_handler(event, context):
+    glue=boto3.client('glue');
+    response = glue.start_job_run(JobName = "serverless-datalake-glue-job-output")
+    print("Lambda Invoke")
+
+Note: Dont forget to add permission policies to the lambda function - AmazonS3FullAccess and AWSGlueServiceRole
+ 
+Glue Pyspark Code:
+---------------------
+
+import sys
+from awsglue.transforms import *
+from awsglue.utils import getResolvedOptions
+from pyspark.context import SparkContext
+from awsglue.context import GlueContext
+from awsglue.job import Job
+
+## @params: [JOB_NAME]
+args = getResolvedOptions(sys.argv, ['JOB_NAME'])
+
+sc = SparkContext()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
+job = Job(glueContext)
+job.init(args['JOB_NAME'], args)
+
+datasource0 = glueContext.create_dynamic_frame.from_catalog(database = "datalake-project", table_name = "csvDataStore", transformation_ctx = "datasource0")
+
+datasink4 = glueContext.write_dynamic_frame.from_options(frame = datasource0, connection_type = "s3", 
+connection_options = {"path": "s3://serverless-datalake-project/parquetDataStore/"}, format = "parquet", transformation_ctx = "datasink4")
+job.commit()
+
+
+Job Name: serverless-datalake-glue-job-output
+
+
+Cloudwatch rule for trigger the Lambda on success of the Glue Crawler: (Name: glue-crawler-cw)
+-----------------------------------------------------------------------------------------------------------------------
+{
+  "source": ["aws.glue"],
+  "detail-type": ["Glue Crawler State Change"],
+  "detail": {
+    "state": ["Succeeded"],
+    "crawlerName": ["serverless-datalake-crawler"]
+  }
+}
+
+Cloudwatch rule for Triggering the SNS on success of Glue Job:(Name: glue-job-state-change-sns)
+---------------------------------------------------------------------------------------------------------
+{
+  "source": ["aws.glue"],
+  "detail-type": ["Glue Job State Change"],
+  "detail": {
+    "jobName": ["serverless-datalake-glue-job-output"],
+    "state": ["SUCCEEDED"]
+  }
+}
